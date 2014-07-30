@@ -12,17 +12,21 @@ namespace Halide {
 struct Expr;
 
 /** Types in the halide type system. They can be ints, unsigned ints,
- * or floats of various bit-widths (the 'bits' field). They can also
- * be vectors of the same (by setting the 'width' field to something
- * larger than one). Front-end code shouldn't use vector
- * types. Instead vectorize a function. */
+ * or floats of various bit-widths (the 'bits' field), or matrices of
+ * these types. They can also be vectors of the same (by setting the
+ * 'width' field to something larger than one). Front-end code
+ * shouldn't use vector types. Instead vectorize a function. */
 struct Type {
-    /** The basic type code: signed integer, unsigned integer, or floating point */
-    enum {Int,  //!< signed integers
+    typedef enum {
+          Int,  //!< signed integers
           UInt, //!< unsigned integers
           Float, //!< floating point numbers
+          Matrix, //!< a matrix of values
           Handle //!< opaque pointer type (void *)
-    } code;
+    } type_code;
+
+    /** The basic type code: signed integer, unsigned integer, floating point, or matrix */
+    type_code code;
 
     /** The number of bits of precision of a single scalar value of this type. */
     int bits;
@@ -32,6 +36,12 @@ struct Type {
 
     /** How many elements (if a vector type). Should be 1 for scalar types. */
     int width;
+
+    /** Type code for the scalar type in a matrix of values. */
+    type_code elem_code;
+
+    /** Dimensions for matrix type. */
+    int num_rows, num_cols;
 
     /** Is this type boolean (represented as UInt(1))? */
     bool is_bool() const {return code == UInt && bits == 1;}
@@ -51,28 +61,53 @@ struct Type {
     /** Is this type an unsigned integer type? */
     bool is_uint() const {return code == UInt;}
 
+    /** Is this type a matrix type. */
+    bool is_matrix() const {return code == Matrix;}
+
     /** Is this type an opaque handle type (void *) */
     bool is_handle() const {return code == Handle;}
 
     /** Compare two types for equality */
     bool operator==(const Type &other) const {
+        if (code == Matrix && other.code == Matrix) {
+            return elem_code == other.elem_code && bits == other.bits && width == other.width &&
+                   num_rows == other.num_rows && num_cols == other.num_cols;
+        }
+
         return code == other.code && bits == other.bits && width == other.width;
     }
 
     /** Compare two types for inequality */
     bool operator!=(const Type &other) const {
+        if (code == Matrix && other.code == Matrix) {
+            return elem_code != other.elem_code || bits != other.bits || width != other.width ||
+                   num_rows != other.num_rows || num_cols != other.num_cols;
+        }
+
         return code != other.code || bits != other.bits || width != other.width;
     }
 
     /** Produce a vector of this type, with 'width' elements */
     Type vector_of(int w) const {
-        Type type = {code, bits, w};
+        Type type = {code, bits, w, elem_code, num_rows, num_cols};
         return type;
     }
 
-    /** Produce the type of a single element of this vector type */
+    /** Produce the type of a single element of this matrix type */
     Type element_of() const {
-        Type type = {code, bits, 1};
+        Type type = {elem_code, bits, 1, elem_code, 1, 1};
+        return type;
+    }
+
+    /** Produce the type of a single element of this vector and/or matrix type */
+    Type scalar_of() const {
+        Type type = {elem_code, bits, width, elem_code, 1, 1};
+        return type;
+    }
+
+    /** Produce  */
+    Type matrix_of(int nrows, int ncols) const {
+        Type type = {Matrix, bits, width, code, nrows, ncols};
         return type;
     }
 
@@ -98,6 +133,9 @@ inline Type Int(int bits, int width = 1) {
     t.code = Type::Int;
     t.bits = bits;
     t.width = width;
+    t.elem_code = t.code;
+    t.num_rows = 1;
+    t.num_cols = 1;
     return t;
 }
 
@@ -107,6 +145,9 @@ inline Type UInt(int bits, int width = 1) {
     t.code = Type::UInt;
     t.bits = bits;
     t.width = width;
+    t.elem_code = t.code;
+    t.num_rows = 1;
+    t.num_cols = 1;
     return t;
 }
 
@@ -116,6 +157,21 @@ inline Type Float(int bits, int width = 1) {
     t.code = Type::Float;
     t.bits = bits;
     t.width = width;
+    t.elem_code = t.code;
+    t.num_rows = 1;
+    t.num_cols = 1;
+    return t;
+}
+
+/** Construct a matrix type */
+inline Type Matrix(Type elem, int num_rows, int num_cols) {
+    Type t;
+    t.code = Matrix;
+    t.bits = elem.bits;
+    t.width = elem.width;
+    t.elem_code = elem.code;
+    t.num_rows = num_rows;
+    t.num_cols = num_cols;
     return t;
 }
 
@@ -130,6 +186,9 @@ inline Type Handle(int width = 1) {
     t.code = Type::Handle;
     t.bits = 64; // All handles are 64-bit for now
     t.width = width;
+    t.elem_code = t.code;
+    t.num_rows = 1;
+    t.num_cols = 1;
     return t;
 }
 
