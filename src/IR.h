@@ -304,10 +304,21 @@ struct Mul : public ExprNode<Mul> {
     static Expr make(Expr a, Expr b) {
         internal_assert(a.defined()) << "Mul of undefined\n";
         internal_assert(b.defined()) << "Mul of undefined\n";
-        internal_assert(a.type() == b.type()) << "Mul of mismatched types\n";
 
-        Mul *node = new Mul;
-        node->type = a.type();
+        Type new_type;
+        if (a.type().is_matrix() && b.type().is_matrix()) {
+            internal_assert(a.type().scalar_of() == b.type().scalar_of()) << "Matrix mul of mismatched scalar types\n";
+            internal_assert(a.type().num_cols == b.type().num_rows) << "Matrix mul of mismatched dimensions\n";
+
+            new_type = Matrix(a.type().scalar_of(), a.type().num_rows, b.type.num_cols);
+        } else {
+            internal_assert(a.type() == b.type()) << "Mul of mismatched types\n";
+
+            new_type = a.type();
+        }
+
+        Mul* node = new Mul;
+        node->type = new_type;
         node->a = a;
         node->b = b;
         return node;
@@ -321,7 +332,9 @@ struct Div : public ExprNode<Div> {
     static Expr make(Expr a, Expr b) {
         internal_assert(a.defined()) << "Div of undefined\n";
         internal_assert(b.defined()) << "Div of undefined\n";
-        internal_assert(a.type() == b.type()) << "Div of mismatched types\n";
+        internal_assert(a.type() == b.type() ||
+                        (a.type().is_matrix() && b.type() == a.type().scalar_of()) << "Div of mismatched types\n";
+        internal_assert(!b.type().is_matrix()) << "Div undefined for matrix divisors\n";
 
         Div *node = new Div;
         node->type = a.type();
@@ -340,7 +353,9 @@ struct Mod : public ExprNode<Mod> {
     static Expr make(Expr a, Expr b) {
         internal_assert(a.defined()) << "Mod of undefined\n";
         internal_assert(b.defined()) << "Mod of undefined\n";
-        internal_assert(a.type() == b.type()) << "Mod of mismatched types\n";
+        internal_assert(a.type() == b.type() ||
+                        (a.type().is_matrix() && b.type() == a.type().scalar_of()) << "Mod of mismatched types\n";
+        internal_assert(!b.type().is_matrix()) << "Mod undefined for matrix modulii\n";
 
         Mod *node = new Mod;
         node->type = a.type();
@@ -350,7 +365,7 @@ struct Mod : public ExprNode<Mod> {
     }
 };
 
-/** The lesser of two values. */
+/** The lesser of two values. For matrix values performs min element wise. */
 struct Min : public ExprNode<Min> {
     Expr a, b;
 
@@ -367,7 +382,7 @@ struct Min : public ExprNode<Min> {
     }
 };
 
-/** The greater of two values */
+/** The greater of two values. For matrix values performs max element wise. */
 struct Max : public ExprNode<Max> {
     Expr a, b;
 
@@ -987,7 +1002,7 @@ struct Call : public ExprNode<Call> {
         if_then_else,
         trace,
         trace_expr,
-        glsl_texture_load, 
+        glsl_texture_load,
         glsl_texture_store,
         memoize_expr,
         copy_memory;
