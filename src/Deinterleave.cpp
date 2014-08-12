@@ -14,6 +14,12 @@ namespace Internal {
 using std::pair;
 using std::make_pair;
 
+
+Expr extract_odd_lanes(Expr e, const Scope<int> &lets);
+Expr extract_even_lanes(Expr e, const Scope<int> &lets);
+Expr extract_mod3_lanes(Expr e, int lane, const Scope<int> &lets);
+
+
 class Deinterleaver : public IRMutator {
 public:
     int starting_lane;
@@ -63,6 +69,7 @@ private:
             t.width = new_width;
             if (internal.contains(op->name)) {
                 expr = internal.get(op->name);
+                return;
             } else if (external_lets.contains(op->name) &&
                        starting_lane == 0 &&
                        lane_stride == 2) {
@@ -71,6 +78,18 @@ private:
                        starting_lane == 1 &&
                        lane_stride == 2) {
                 expr = Variable::make(t, op->name + ".odd_lanes", op->image, op->param, op->reduction_domain);
+            } else if (external_lets.contains(op->name) &&
+                       starting_lane == 0 &&
+                       lane_stride == 3) {
+                expr = Variable::make(t, op->name + ".lanes_0_mod3", op->image, op->param, op->reduction_domain);
+            } else if (external_lets.contains(op->name) &&
+                       starting_lane == 1 &&
+                       lane_stride == 3) {
+                expr = Variable::make(t, op->name + ".lanes_1_mod3", op->image, op->param, op->reduction_domain);
+            } else if (external_lets.contains(op->name) &&
+                       starting_lane == 2 &&
+                       lane_stride == 3) {
+                expr = Variable::make(t, op->name + ".lanes_2_mod3", op->image, op->param, op->reduction_domain);
             } else {
                 // Uh-oh, we don't know how to deinterleave this vector expression
                 // Make llvm do it
@@ -106,6 +125,59 @@ private:
                    op->call_type == Call::Intrinsic &&
                    starting_lane == 1 && lane_stride == 2) {
             expr = op->args[1];
+        } else if (op->name == Call::interleave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 0 && lane_stride == 3) {
+            Expr a = extract_mod3_lanes(op->args[0], 0, external_lets);
+            Expr b = extract_mod3_lanes(op->args[1], 1, external_lets);
+
+            expr = Call::make(op->type, Call::interleave_vectors,
+                              vec(a, b), Call::Intrinsic);
+        } else if (op->name == Call::interleave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 1 && lane_stride == 3) {
+            Expr a = extract_mod3_lanes(op->args[1], 0, external_lets);
+            Expr b = extract_mod3_lanes(op->args[0], 2, external_lets);
+            expr = Call::make(op->type, Call::interleave_vectors,
+                              vec(a, b), Call::Intrinsic);
+        } else if (op->name == Call::interleave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 2 && lane_stride == 3) {
+            Expr a = extract_mod3_lanes(op->args[0], 1, external_lets);
+            Expr b = extract_mod3_lanes(op->args[1], 2, external_lets);
+
+            expr = Call::make(op->type, Call::interleave_vectors,
+                              vec(a, b), Call::Intrinsic);
+        } else if (op->name == Call::trileave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 0 && lane_stride == 2) {
+            Expr a = extract_even_lanes(op->args[0], external_lets);
+            Expr b = extract_odd_lanes(op->args[1], external_lets);
+            Expr c = extract_even_lanes(op->args[2], external_lets);
+
+            expr = Call::make(op->type, Call::trileave_vectors,
+                              vec(a, c, b), Call::Intrinsic);
+        } else if (op->name == Call::trileave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 1 && lane_stride == 2) {
+            Expr a = extract_odd_lanes(op->args[0], external_lets);
+            Expr b = extract_even_lanes(op->args[1], external_lets);
+            Expr c = extract_odd_lanes(op->args[2], external_lets);
+
+            expr = Call::make(op->type, Call::trileave_vectors,
+                              vec(b, a, c), Call::Intrinsic);
+        } else if (op->name == Call::trileave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 0 && lane_stride == 3) {
+            expr = op->args[0];
+        } else if (op->name == Call::trileave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 1 && lane_stride == 3) {
+            expr = op->args[1];
+        } else if (op->name == Call::trileave_vectors &&
+                   op->call_type == Call::Intrinsic &&
+                   starting_lane == 2 && lane_stride == 3) {
+            expr = op->args[2];
         } else {
 
             Type t = op->type;
@@ -175,6 +247,15 @@ Expr extract_odd_lanes(Expr e) {
     return extract_odd_lanes(e, lets);
 }
 
+Expr extract_mod3_lanes(Expr e, int lane, const Scope<int> &lets) {
+    Deinterleaver d(lets);
+    d.starting_lane = lane;
+    d.lane_stride = 3;
+    d.new_width = (e.type().width+2)/3;
+    e = d.mutate(e);
+    return simplify(e);
+}
+
 Expr extract_lane(Expr e, int lane) {
     Scope<int> lets;
     Deinterleaver d(lets);
@@ -193,6 +274,7 @@ class Interleaver : public IRMutator {
     using IRMutator::visit;
 
     int interleave_levels;
+    bool should_trileave;
 
     Expr deinterleave_expr(Expr e) {
         if (e.type().width <= 2) {
@@ -201,8 +283,16 @@ class Interleaver : public IRMutator {
         } else if (interleave_levels == 1) {
             Expr a = extract_even_lanes(e, vector_lets);
             Expr b = extract_odd_lanes(e, vector_lets);
+
             return Call::make(e.type(), Call::interleave_vectors,
                               vec(a, b), Call::Intrinsic);
+        } else if (should_trileave) {
+            Expr a = extract_mod3_lanes(e, 0, vector_lets);
+            Expr b = extract_mod3_lanes(e, 1, vector_lets);
+            Expr c = extract_mod3_lanes(e, 2, vector_lets);
+
+            return Call::make(e.type(), Call::trileave_vectors,
+                              vec(a, b, c), Call::Intrinsic);
         } else {
             std::vector< std::vector<Expr> > lanes(interleave_levels);
 
@@ -283,6 +373,9 @@ class Interleaver : public IRMutator {
         if (value.type().is_vector()) {
             result = T::make(op->name + ".even_lanes", extract_even_lanes(value, vector_lets), result);
             result = T::make(op->name + ".odd_lanes", extract_odd_lanes(value, vector_lets), result);
+            result = T::make(op->name + ".lanes_0_mod3", extract_mod3_lanes(value, 0, vector_lets), result);
+            result = T::make(op->name + ".lanes_1_mod3", extract_mod3_lanes(value, 1, vector_lets), result);
+            result = T::make(op->name + ".lanes_2_mod3", extract_mod3_lanes(value, 2, vector_lets), result);
         }
 
         return result;
@@ -301,6 +394,8 @@ class Interleaver : public IRMutator {
         int bits;
         if (r && is_const_power_of_two(op->b, &bits)) {
             interleave_levels = bits;
+        } else if (r && is_const(op->b, 3)) {
+            should_trileave = true;
         }
         IRMutator::visit(op);
     }
@@ -310,45 +405,58 @@ class Interleaver : public IRMutator {
         int bits;
         if (r && is_const_power_of_two(op->b, &bits)) {
             interleave_levels = bits;
+        } else if (r && is_const(op->b, 3)) {
+            should_trileave = true;
         }
         IRMutator::visit(op);
     }
 
     void visit(const Load *op) {
-        bool old_interleave_levels = interleave_levels;
+        int old_interleave_levels = interleave_levels;
+        bool old_should_trileave = should_trileave;
 
-        interleave_levels = false;
+        interleave_levels = 0;
+        should_trileave = false;
+
         Expr idx = mutate(op->index);
         expr = Load::make(op->type, op->name, idx, op->image, op->param);
-        if (interleave_levels) {
+
+        if (interleave_levels > 0 || should_trileave) {
             expr = deinterleave_expr(expr);
         }
 
         interleave_levels = old_interleave_levels;
+        should_trileave = old_should_trileave;
     }
 
     void visit(const Store *op) {
-        bool old_interleave_levels = interleave_levels;
+        int old_interleave_levels = interleave_levels;
+        bool old_should_trileave = should_trileave;
 
-        interleave_levels = false;
+        interleave_levels = 0;
+        should_trileave = false;
+
         Expr idx = mutate(op->index);
-        if (interleave_levels) {
+        if (interleave_levels > 0 || should_trileave) {
             idx = deinterleave_expr(idx);
         }
 
-        interleave_levels = false;
+        interleave_levels = 0;
+        should_trileave = false;
+
         Expr value = mutate(op->value);
-        if (interleave_levels) {
+        if (interleave_levels > 0 || should_trileave) {
             value = deinterleave_expr(value);
         }
 
         stmt = Store::make(op->name, value, idx);
 
         interleave_levels = old_interleave_levels;
+        should_trileave = old_should_trileave;
     }
 
 public:
-    Interleaver() : interleave_levels(0) {}
+    Interleaver() : interleave_levels(0), should_trileave(false) {}
 };
 
 Stmt rewrite_interleavings(Stmt s) {

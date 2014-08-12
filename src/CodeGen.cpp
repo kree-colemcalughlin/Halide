@@ -1353,6 +1353,47 @@ void CodeGen::visit(const Call *op) {
 
             value = builder->CreateShuffleVector(codegen(a), codegen(b), ConstantVector::get(indices));
 
+        } else if (op->name == Call::trileave_vectors) {
+            internal_assert(op->args.size() == 3);
+            Expr a = op->args[0], b = op->args[1], c = op->args[2];
+            debug(3) << "Vectors to trileave: " << a << ", " << b << ", " << c << "\n";
+
+            // First we shuffle a & b together...
+            vector<Constant *> indices(op->type.width);
+            for (int i = 0; i < op->type.width; i++) {
+              if (i % 3 == 0) {
+                indices[i] = ConstantInt::get(i32, i/3);
+              } else if (i % 3 == 1) {
+                indices[i] = ConstantInt::get(i32, i/3 + a.type().width);
+              } else {
+                indices[i] = UndefValue::get(i32);
+              }
+            }
+
+            Value *value_ab = builder->CreateShuffleVector(codegen(a), codegen(b), ConstantVector::get(indices));
+
+            // Then we create a vector of the output size that contains c...
+            for (int i = 0; i < op->type.width; i++) {
+              if (i < c.type().width) {
+                  indices[i] = ConstantInt::get(i32, i);
+                } else {
+                  indices[i] = UndefValue::get(i32);
+                }
+            }
+
+            Value *value_c = builder->CreateShuffleVector(codegen(c), UndefValue::get(llvm_type_of(c.type())), ConstantVector::get(indices));
+
+            // Finally, we shuffle the above 2 vectors together into the result.
+            for (int i = 0; i < op->type.width; i++) {
+                if (i % 3 < 2) {
+                  indices[i] = ConstantInt::get(i32, i);
+                } else {
+                  indices[i] = ConstantInt::get(i32, i/3 + op->type.width);
+                }
+            }
+
+            value = builder->CreateShuffleVector(value_ab, value_c, ConstantVector::get(indices));
+
         } else if (op->name == Call::debug_to_file) {
             internal_assert(op->args.size() == 9);
             const StringImm *filename = op->args[0].as<StringImm>();

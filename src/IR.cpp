@@ -79,6 +79,7 @@ using std::string;
 const string Call::debug_to_file = "debug_to_file";
 const string Call::shuffle_vector = "shuffle_vector";
 const string Call::interleave_vectors = "interleave_vectors";
+const string Call::trileave_vectors = "trileave_vectors";
 const string Call::reinterpret = "reinterpret";
 const string Call::bitwise_and = "bitwise_and";
 const string Call::bitwise_not = "bitwise_not";

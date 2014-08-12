@@ -960,6 +960,7 @@ struct Call : public ExprNode<Call> {
     EXPORT static const std::string debug_to_file,
         shuffle_vector,
         interleave_vectors,
+        trileave_vectors,
         reinterpret,
         bitwise_and,
         bitwise_not,
